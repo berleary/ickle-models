@@ -1,0 +1,239 @@
+# ickle approved-models catalogue
+# ---------------------------------------------------------------------------
+# The evidence-based guide to which models to call through the ickle LiteLLM
+# gateway and HOW to prompt each one. Surfaced to callers via the MCP tool
+# `describe_models`. This is the seed of the "approved list" and feeds the
+# `model-policy` Solon slug's fast_cheap tier.
+#
+# Honesty rule: `status: unassessed` means there is NO bakeoff evidence for
+# that model. Do not treat its use_cases/strengths as tested. Verdicts cite
+# the session/date they came from (see docs/model-assessments.md for the full
+# provenance trail).
+#
+# Ber should eyeball this: it backs model-policy's fast_cheap tier. Changes to
+# fast_cheap route through EDI per the `workflow-changes-through-edi` slug.
+# ---------------------------------------------------------------------------
+
+meta:
+  reviewed: 2026-07-08
+  maintainer: EDI (ber@berleary.com)
+  gateway: "LiteLLM at https://ickle.tail55835e.ts.net:4000 (host: ickle tailnet box)"
+  feeds: "model-policy slug, fast_cheap tier (DeepSeek V3.2 favoured 2026-07)"
+  raw_list_tool: "list_models() returns every callable id; this catalogue curates the subset with evidence"
+  status_legend:
+    approved: "bakeoff winner or committed in production for its use case"
+    conditional: "works, but only within stated limits"
+    rejected: "tested and failed its use case, or fails through the gateway"
+    reference: "quality anchor / not a cheap model, listed for comparison"
+    unassessed: "callable but no bakeoff evidence — prompt conservatively"
+
+# ===========================================================================
+# GATEWAY CONVENTIONS — read these before ANY call. They are gateway-wide and
+# the #1 source of "why did I get an empty/garbage reply".
+# ===========================================================================
+gateway_conventions:
+  call_shape: >
+    The MCP call_model tool exposes only: model, prompt, system, max_tokens.
+    There is NO temperature, top_p, tool-use, or web-search parameter. If you
+    need those, you are using the wrong surface — call the model's provider
+    directly. Gateway default temperature applies.
+  reasoning_models: >
+    Reasoning models (anything that "thinks" before answering — gpt-5-nano,
+    gpt-5-mini, o1/o3-mini, GLM-5.x, MiniMax, MiMo, DeepSeek-R1, Qwen *-thinking)
+    can return an EMPTY content field through the gateway, because hidden
+    reasoning tokens are billed and can consume the whole max_tokens budget
+    before any visible answer is produced. Standard chat models (DeepSeek-V3.2,
+    gpt-5.2-chat, Claude, Gemini flash) do not have this problem. Mitigations:
+    (1) prefer a standard chat model for cheap/bulk work; (2) if you must use a
+    reasoning model, set max_tokens to 2000+; (3) DeepSeek-R1 was observed
+    returning clean merged content at max_tokens=400 (2026-07-08) — behaviour
+    varies by model, so verify before relying on it.
+  min_max_tokens: "max_tokens < 16 returns HTTP 400 from OpenAI-family models. Keep it >= 256."
+  json_output: >
+    No response_format/JSON-mode param is exposed. Ask for JSON in the prompt.
+    Expect DeepSeek-chat to wrap JSON in ```json fences even when told "only
+    JSON" (verified 2026-07-08) — strip fences before parsing. Gemini-flash-lite
+    and DeepSeek-V3.2 return clean, valid JSON reliably (37/37 in bakeoffs).
+  web_search: >
+    OpenRouter's ":online" id suffix adds Exa web search to ANY model but
+    injects ~27k tokens (~$0.17/call). Expensive — avoid for routine work.
+  concurrency: >
+    The gateway handles concurrent calls cleanly (4 full-length calls ~10s,
+    zero 429s). Parallelise across models; latency is model generation, not
+    gateway overhead.
+
+# ===========================================================================
+# FAMILY PROMPTING GUIDES — how to structure queries per model family.
+# ===========================================================================
+families:
+  deepseek:
+    prompting: "Standard chat. Plain system + user. Instruction-following is good; it does NOT need reasoning scaffolding."
+    reasoning_variant: "deepseek-r1 / r1-0528 are reasoning models — give them room (max_tokens 2000+). deepseek-chat / deepseek-v3.2 are standard chat models, immune to the reasoning-budget trap."
+    json: "Reliable, but deepseek-chat fences JSON in ```json — strip fences."
+    temperament: "Loose/expansive — affirms broadly, can confabulate specifics (e.g. invented services/dates). Good for recall, add a verification pass for precision."
+    temperature: "Gateway default; no per-call control via call_model."
+  qwen:
+    prompting: "Standard chat. Local qwen2.5:3b needs SHORT, dense prompts (<600 words of context) or it times out on CPU."
+    reasoning_variant: "qwen3 *-thinking / -a22b-thinking are reasoning models — same empty-content caution as other reasoners."
+    json: "Small local model produces valid JSON structurally but unreliable content — do not trust its judgment fields."
+    temperature: "Gateway default."
+  glm:
+    prompting: "Standard chat. GLM-5.x are reasoning-heavy; strong on paper (GLM-5.2 beat Sonnet-4.6 on a reasoning board) but flaked through the gateway (empty content) as of 2026-07-04 — treat as blocked until re-verified with high max_tokens."
+    json: "Untested clean through the gateway."
+    temperature: "Gateway default."
+  openai:
+    prompting: "Standard chat for gpt-*-chat / gpt-4o. The gpt-5 mini/nano and o-series are REASONING models and returned empty content through the gateway — avoid for cheap work."
+    json: "gpt-5.2-chat returns clean JSON. mini/nano unreliable via gateway."
+    min_tokens: "max_tokens < 16 -> HTTP 400."
+    temperature: "Gateway default."
+  google:
+    prompting: "Standard chat. gemini flash-lite is the sweet spot for cheap triage/summary. Pro tier is a slow reasoning model."
+    json: "gemini-3.1-flash-lite returns clean valid JSON reliably."
+    caveat: "Some Gemini tiers flaked through the gateway (empty content) — flash-lite was the reliable one in bakeoffs."
+    temperature: "Gateway default."
+  mistral:
+    prompting: "Standard chat. Unassessed — no bakeoff evidence."
+    temperature: "Gateway default."
+  local_ollama:
+    prompting: "qwen2.5:3b and nomic-embed-text run on ickle's CPU Ollama (no GPU, ~5.6 tok/s). Latency-tolerant background work only. Keep prompts short and dense."
+
+# ===========================================================================
+# MODELS
+# ===========================================================================
+models:
+  # ---- APPROVED ----
+  - id: openrouter/deepseek/deepseek-v3.2
+    family: deepseek
+    status: approved
+    cost_speed: "cheap / medium (~$0.30-0.50 per extractor run vs ~$7 for gpt-5.2; verbose 300-400 tok, 8-12s/call)"
+    use_cases: [structured extraction, reasoning-quality-at-low-cost, bulk generative work, fast_cheap tier default]
+    strengths:
+      - "Matched GPT-5.2 on hard extraction and arguably reasoned better (correctly labelled a fabrication as confabulation, cited ground-truth contradiction). 2026-07-04."
+      - "97% agreement with GPT-5.2 on the fields that drive the report; diverges conservatively. 2026-07-05."
+      - "Standard chat model — immune to the reasoning-budget/empty-content trap. Comes through the gateway clean."
+      - "~1/10th the cost of GPT-5.2 per token."
+    weaknesses:
+      - "Loose/expansive temperament — affirms broadly and can confabulate specifics (invented HR-adjacent services/payroll). Add a verification pass for precision-critical work."
+      - "Verbose; ignores terseness instructions (verified 2026-07-08: gave full working for '17*23, just the number')."
+    verdict: "Committed extractor in Representation-Profiles + StackForGood; the ickle fast_cheap default. DeepSeek favoured as of 2026-07."
+    provenance: "session 0db06511 (2026-07-04), bf6a0a1a (2026-07-05); live-confirmed 2026-07-08"
+
+  - id: openrouter/google/gemini-3.1-flash-lite
+    family: google
+    status: approved
+    cost_speed: "very cheap / very fast (~1s/item triage; 5x faster than gemini-2.5-flash)"
+    use_cases: [triage/classification, card summaries, detailed summaries, compose, high-volume cheap generative]
+    strengths:
+      - "Won the source-manager digest bakeoff across triage/summary/compose — 'exactly where local qwen2.5:3b failed'. 2026-06-17."
+      - "Clean valid JSON (37/37), correct classifications, real theses, named specifics."
+      - "64% binary agreement with the taxonomy baseline — above Haiku's own 59% self-agreement."
+    weaknesses:
+      - "Some higher Gemini tiers flake through the gateway; stick to flash-lite for reliability."
+    verdict: "Committed model for all generative source-manager tasks (Anthropic sunset from that stack)."
+    provenance: "session 98052add (2026-06-17)"
+
+  - id: nomic-embed-text
+    family: local_ollama
+    status: approved
+    cost_speed: "free (local, ickle CPU) / ~90s to rank 368 items"
+    use_cases: [relevance ranking, semantic/hybrid search, top-N retrieval]
+    strengths:
+      - "Winner for relevance ranking vs the generative 3B — surfaced the reader's genuine niche, buried off-topic noise."
+      - "768-dim; powers source-manager hybrid search (Qdrant + keyword union)."
+    weaknesses:
+      - "Use as a top-N ranker, NOT a threshold — narrow score band (0.51-0.82), keyword bleed survives, per-interest attribution unreliable."
+    verdict: "Production embeddings/ranking model."
+    provenance: "sessions cea814ae (2026-06-16), 98052add (2026-06-17)"
+
+  # ---- CONDITIONAL ----
+  - id: qwen2.5:3b
+    family: local_ollama
+    status: conditional
+    cost_speed: "free (local, ickle CPU, no GPU) / slow: 5.6 tok/s, ~94s/item"
+    use_cases: [short dense compression, latency-tolerant background summaries of well-formed input]
+    strengths:
+      - "Structurally valid JSON 10/10 on triage."
+      - "3/5 good on summarization when input is substantial and well-formed."
+    weaknesses:
+      - "NOT viable for triage/classification — rubber-stamped 9/10 items as 'deeper' (1/10 agreement). It doesn't triage, it defaults."
+      - "Hallucinates on thin input (44-word snippet -> 3 invented paragraphs; invented names/dates/examples)."
+      - "NOT viable for generative relevance filtering — miscalibrated, tags everything by 'does this mention AI?'."
+      - "Prompts >600 words time out past 5 min; truncating to gain speed degrades judgment further."
+      - "Hallucinated badly on a simple factual question (verified 2026-07-08)."
+    verdict: "Rule: local 3B works for short/dense COMPRESS tasks; fails at JUDGMENT and at long/sparse content. Do not use for classification, relevance, or on-demand answers."
+    provenance: "session cea814ae (2026-06-16); live-confirmed 2026-07-08"
+
+  # ---- REJECTED (through the gateway, for cheap use) ----
+  - id: openrouter/deepseek/deepseek-chat-v3.1
+    family: deepseek
+    status: rejected
+    cost_speed: "cheap / slow (~6s, slowest in bakeoff)"
+    use_cases: []
+    weaknesses: ["Lost the source-manager triage bakeoff — slowest and weakest. NOTE: distinct from v3.2, which won a later bakeoff."]
+    verdict: "Superseded by deepseek-v3.2. Do not confuse the two."
+    provenance: "session 98052add (2026-06-17)"
+
+  - id: openrouter/openai/gpt-5-nano
+    family: openai
+    status: rejected
+    use_cases: []
+    weaknesses: ["Returns null content through the gateway — it's a reasoning model; hidden reasoning eats the budget."]
+    verdict: "Dropped. Use a standard chat model instead."
+    provenance: "session 98052add (2026-06-17)"
+
+  - id: openrouter/openai/gpt-5-mini
+    family: openai
+    status: rejected
+    use_cases: []
+    weaknesses: ["Returned nothing (empty content) — reasoning model via gateway."]
+    verdict: "Dropped for cheap extraction."
+    provenance: "session 0db06511 (2026-07-04)"
+
+  - id: openrouter/z-ai/glm-5.1
+    family: glm
+    status: rejected
+    use_cases: []
+    weaknesses: ["Returned nothing (error/empty) through the gateway — reasoning-content issue, not proven model quality."]
+    verdict: "Blocked until the gateway serves reasoning models reliably (retry with max_tokens 2000+ / merge flag). GLM-5.2 max scored well on paper (beat Sonnet-4.6) but same gateway block."
+    provenance: "session 0db06511 (2026-07-04)"
+
+  # ---- REFERENCE ANCHORS (not cheap; for comparison) ----
+  - id: openrouter/openai/gpt-5.2-chat
+    family: openai
+    status: reference
+    cost_speed: "expensive (~$7 per extractor run)"
+    use_cases: [extraction quality reference]
+    strengths: ["Clean JSON, standard chat model, immune to reasoning-budget trap — the bar DeepSeek-V3.2 matched."]
+    verdict: "Quality anchor. Replaced by DeepSeek-V3.2 on cost."
+    provenance: "session 0db06511 (2026-07-04)"
+
+  - id: openrouter/anthropic/claude-haiku-4.5
+    family: anthropic
+    status: reference
+    use_cases: [utility tier reference]
+    weaknesses: ["Only 27% self-agreement on the 5-way taxonomy — its labels are not ground truth. Within-family: Opus > Sonnet > Haiku is a clean capacity gradient."]
+    verdict: "Reference only. Note model-policy routes the utility tier to Haiku separately from this catalogue."
+    provenance: "sessions 98052add, 4209fb9c (2026-06-17)"
+
+  # ---- UNASSESSED (callable, no evidence — prompt conservatively) ----
+  - id: openrouter/z-ai/glm-4.6
+    family: glm
+    status: unassessed
+  - id: openrouter/moonshotai/kimi-k2.5
+    family: unknown
+    status: unassessed
+  - id: openrouter/x-ai/grok-4
+    family: unknown
+    status: unassessed
+  - id: openrouter/mistralai/mistral-small-3.2-24b-instruct
+    family: mistral
+    status: unassessed
+  - id: openrouter/qwen/qwen3-235b-a22b-2507
+    family: qwen
+    status: unassessed
+  - id: openrouter/openai/gpt-oss-120b
+    family: openai
+    status: unassessed
+  - id: openrouter/meta-llama/llama-3-70b-instruct
+    family: meta
+    status: unassessed

@@ -1,0 +1,131 @@
+{
+  "id": "IckleModelReview1",
+  "name": "ickle - Monthly model review",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "b1a00000-0000-0000-0000-000000000001",
+      "name": "Manual run",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 140]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "months", "monthsInterval": 1, "triggerAtDayOfMonth": 1, "triggerAtHour": 8 }
+          ]
+        }
+      },
+      "id": "b1a00000-0000-0000-0000-000000000002",
+      "name": "Monthly (1st @ 08:00)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 320]
+    },
+    {
+      "parameters": {
+        "url": "https://openrouter.ai/api/v1/models",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 20000 }
+      },
+      "id": "b1a00000-0000-0000-0000-000000000003",
+      "name": "Fetch OpenRouter models",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 220],
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_OPENROUTER_CRED_ID", "name": "OpenRouter Bearer" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Diff OpenRouter's live catalogue against the ids ickle already knows.\n// KNOWN_IDS is the ickle approved-models catalogue baseline (bare openrouter\n// vendor/model ids). SYNC THIS when data/approved-models.yaml changes, or\n// point this node at a hosted copy of the catalogue instead (see setup doc).\nconst KNOWN_IDS = new Set([\n  // --- keep in sync with ickle-models/data/approved-models.yaml (approved + noted) ---\n  \"deepseek/deepseek-v3.2\",\n  \"deepseek/deepseek-chat\",\n  \"deepseek/deepseek-chat-v3.1\",\n  \"deepseek/deepseek-r1\",\n  \"deepseek/deepseek-r1-0528\",\n  \"qwen/qwen3-235b-a22b-2507\",\n  \"qwen/qwen3-coder\",\n  \"z-ai/glm-4.6\",\n  \"z-ai/glm-4.7\",\n  \"openai/gpt-5-mini\",\n  \"openai/gpt-4o\",\n  \"google/gemini-2.5-flash\",\n  \"mistralai/mistral-small-3.2-24b-instruct\",\n  \"moonshotai/kimi-k2.5\",\n  \"x-ai/grok-4\"\n]);\n\nconst data = ($input.first().json.data) || [];\n// Newcomers: models OpenRouter lists that we have no catalogue line for.\n// Cap the cheap-test set so a review run stays cheap and fast.\nconst MAX_TEST = 8;\nconst newcomers = data\n  .map(m => m.id)\n  .filter(id => id && !KNOWN_IDS.has(id))\n  .sort();\n\nconst toTest = newcomers.slice(0, MAX_TEST);\nreturn toTest.map(id => ({ json: { openrouter_id: id, ickle_id: `openrouter/${id}` } }))\n  .concat([{ json: { _summary: true, total_openrouter: data.length, newcomer_count: newcomers.length, tested: toTest.length, newcomers } }]);"
+      },
+      "id": "b1a00000-0000-0000-0000-000000000004",
+      "name": "Diff vs catalogue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 220]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            { "leftValue": "={{ $json._summary }}", "rightValue": "", "operator": { "type": "boolean", "operation": "notExists" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "b1a00000-0000-0000-0000-000000000005",
+      "name": "Only newcomers",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [760, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:4000/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.ickle_id, max_tokens: 300, messages: [ { role: 'system', content: 'You are a concise assistant. Follow instructions exactly.' }, { role: 'user', content: 'Standard ickle model probe. Do THREE things and nothing else: (1) In one sentence, say what you are best suited for. (2) Return this exact JSON on its own line: {\"ok\": true, \"n\": 42}. (3) Compute 17*23 and give only the number.' } ] }) }}",
+        "options": { "timeout": 60000 }
+      },
+      "id": "b1a00000-0000-0000-0000-000000000006",
+      "name": "Probe via ickle",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 220],
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_ICKLE_CRED_ID", "name": "ickle LiteLLM master key" }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect probe results into one review payload.\nconst items = $input.all();\nconst lines = items.map(it => {\n  const j = it.json;\n  const id = (j && j.model) || '(unknown)';\n  let reply = '';\n  try { reply = j.choices[0].message.content.replace(/\\s+/g, ' ').slice(0, 240); }\n  catch (e) { reply = '[no reply / error: ' + (j && (j.error && j.error.message || JSON.stringify(j).slice(0,120)) ) + ']'; }\n  return `- ${id}: ${reply}`;\n}).join('\\n');\nconst msg = `ickle monthly model review\\n\\n${items.length} newcomer(s) probed via the gateway. Eyeball, then update ickle-models/data/approved-models.yaml (and model-policy fast_cheap if a newcomer beats DeepSeek):\\n\\n${lines || '(no newcomers this month)'}`;\nreturn [{ json: { ntfy: { topic: 'ickle-model-review', title: 'ickle: monthly model review', message: msg, priority: 3, tags: ['robot','mag'] } } }];"
+      },
+      "id": "b1a00000-0000-0000-0000-000000000007",
+      "name": "Build review note",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://shard.tail55835e.ts.net:8452",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.ntfy) }}",
+        "options": { "timeout": 15000 }
+      },
+      "id": "b1a00000-0000-0000-0000-000000000008",
+      "name": "Send ntfy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1480, 220]
+    }
+  ],
+  "connections": {
+    "Manual run": { "main": [[{ "node": "Fetch OpenRouter models", "type": "main", "index": 0 }]] },
+    "Monthly (1st @ 08:00)": { "main": [[{ "node": "Fetch OpenRouter models", "type": "main", "index": 0 }]] },
+    "Fetch OpenRouter models": { "main": [[{ "node": "Diff vs catalogue", "type": "main", "index": 0 }]] },
+    "Diff vs catalogue": { "main": [[{ "node": "Only newcomers", "type": "main", "index": 0 }]] },
+    "Only newcomers": { "main": [[{ "node": "Probe via ickle", "type": "main", "index": 0 }]] },
+    "Probe via ickle": { "main": [[{ "node": "Build review note", "type": "main", "index": 0 }]] },
+    "Build review note": { "main": [[{ "node": "Send ntfy", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false
+}

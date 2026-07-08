@@ -1,1 +1,5 @@
 mcp>=1.2
+# For the describe_models catalogue (data/approved-models.yaml). If absent, the
+# server still starts and list_models/call_model work; describe_models falls
+# back to a JSON sidecar or returns an error marker.
+PyYAML>=6

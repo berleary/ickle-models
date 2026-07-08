@@ -16,8 +16,21 @@ extend, or read in five minutes.
 
 | Tool | Description |
 |------|-------------|
-| `list_models()` | Returns every model id callable through the gateway. Call this first to discover valid `model` values. |
+| `list_models()` | Returns every model id callable through the gateway — the *raw* list, no guidance. Valid `model` values for `call_model`. |
+| `describe_models(model="")` | The **approved-models catalogue**: which model to use for what, its strengths/weaknesses, and — crucially — **how to prompt each family** (system-prompt handling, reasoning-model quirks, JSON-mode, temperature norms, cost/speed). Read this before `call_model` so you are not guessing query structure. Pass a model id / family name to get just that entry. |
 | `call_model(model, prompt, system="", max_tokens=1024)` | Sends a prompt to any of those models and returns its text reply. Useful for getting a second opinion from another model mid-task, or routing a sub-question to a web-search model. |
+
+### The approved-models catalogue
+
+`describe_models` reads [`data/approved-models.yaml`](data/approved-models.yaml)
+— an evidence-based, honestly-graded guide (winners per use case, gateway
+prompting conventions, and per-family quirks). It is the seed of the approved
+list and feeds the `model-policy` fast_cheap tier. Every verdict traces to a
+real assessment recorded in [`docs/model-assessments.md`](docs/model-assessments.md);
+models with no evidence are marked `unassessed` rather than invented. A monthly
+n8n job keeps it fresh — see [`docs/n8n-monthly-review.md`](docs/n8n-monthly-review.md).
+The design rationale for adding `describe_models` (rather than changing
+`list_models`) is in [`docs/decisions.md`](docs/decisions.md).
 
 ## Why
 
@@ -33,7 +46,7 @@ the model can pick and call any of them itself.
 - Python 3.10+
 - A running LiteLLM gateway (or any OpenAI-compatible `/v1/models` and
   `/v1/chat/completions` endpoint)
-- `pip install mcp`
+- `pip install -r requirements.txt` (`mcp`, plus `PyYAML` for `describe_models`)
 
 ## Configuration
 
