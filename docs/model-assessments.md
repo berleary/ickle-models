@@ -100,3 +100,28 @@ and the RP/StackForGood config `models.extract` blocks. Solon notes #6639 and
 #8833 are also referenced. Consolidated durable notes already exist at
 `~/.claude/projects/-home-ber-Claude/memory/ickle.md` and
 `.../memory/llm_workload_topology.md`.
+
+## 2026-07-08 (evening) — EDI retest: reasoning-model rejections were a probe artifact
+
+Ber challenged the GLM rejection ("they definitely work"). EDI retested through
+the live gateway with adequate budgets (max_tokens 2000–8000):
+
+| Model | Probe | Result |
+|---|---|---|
+| glm-5.1 | exact-JSON instruction, 8000 | exact, unfenced JSON ✓ |
+| glm-5 | one-sentence summary, 8000 | read timeout, then "OK" probe at 4000 ✓ (slow) |
+| glm-4.7-flash | one-word classification, 2000 | "positive" ✓ (fast) |
+| gpt-5-mini | exact-JSON instruction, 8000 | exact JSON ✓ |
+| minimax-m2.5 | exact-JSON instruction, 8000 | clean JSON, leading whitespace ✓ |
+
+Conclusion: the 2026-07-04 "returned nothing" verdicts (gpt-5-nano/mini,
+GLM-5.1, MiniMax, MiMo) were the reasoning-budget trap the catalogue itself
+documents — the probes ran at the default max_tokens=1024. Statuses corrected
+in approved-models.yaml (rejected → conditional; nano → unassessed pending its
+own retest; MiMo untested). Quality remains unassessed — these passed
+plumbing probes, not bakeoffs.
+
+Evidence: this session (EDI coordination, 2026-07-08). Lesson for future
+assessments: a rejection verdict needs the failure *mechanism* ruled out, not
+just observed — especially when the catalogue already names that mechanism as
+a known trap.

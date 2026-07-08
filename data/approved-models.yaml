@@ -43,9 +43,14 @@ gateway_conventions:
     can return an EMPTY content field through the gateway, because hidden
     reasoning tokens are billed and can consume the whole max_tokens budget
     before any visible answer is produced. Standard chat models (DeepSeek-V3.2,
-    gpt-5.2-chat, Claude, Gemini flash) do not have this problem. Mitigations:
-    (1) prefer a standard chat model for cheap/bulk work; (2) if you must use a
-    reasoning model, set max_tokens to 2000+; (3) DeepSeek-R1 was observed
+    gpt-5.2-chat, Claude, Gemini flash) do not have this problem. RETEST
+    2026-07-08 (EDI): with max_tokens 4000-8000, GLM-5.1, GLM-5, gpt-5-mini and
+    minimax-m2.5 ALL return clean content — the earlier "rejected: empty
+    content" verdicts were a probe artifact of the default 1024 budget, not
+    model failures. Mitigations: (1) prefer a standard chat model for
+    cheap/bulk work; (2) any reasoning model needs max_tokens >= 4000;
+    (3) reasoning models are SLOW — GLM-5 hit the MCP read timeout on a
+    one-sentence task before succeeding on retry; (4) DeepSeek-R1 was observed
     returning clean merged content at max_tokens=400 (2026-07-08) — behaviour
     varies by model, so verify before relying on it.
   min_max_tokens: "max_tokens < 16 returns HTTP 400 from OpenAI-family models. Keep it >= 256."
@@ -78,12 +83,12 @@ families:
     json: "Small local model produces valid JSON structurally but unreliable content — do not trust its judgment fields."
     temperature: "Gateway default."
   glm:
-    prompting: "Standard chat. GLM-5.x are reasoning-heavy; strong on paper (GLM-5.2 beat Sonnet-4.6 on a reasoning board) but flaked through the gateway (empty content) as of 2026-07-04 — treat as blocked until re-verified with high max_tokens."
-    json: "Untested clean through the gateway."
+    prompting: "Standard chat. GLM-5.x are reasoning-heavy: give them max_tokens >= 4000 and expect slowness (GLM-5 can exceed the MCP read timeout; retry). Re-verified working through the gateway 2026-07-08 — the 2026-07-04 'empty content' block was a budget artifact. glm-4.7-flash is the fast non-reasoning variant for quick classification."
+    json: "GLM-5.1 returned exact, unfenced JSON as instructed (verified 2026-07-08)."
     temperature: "Gateway default."
   openai:
-    prompting: "Standard chat for gpt-*-chat / gpt-4o. The gpt-5 mini/nano and o-series are REASONING models and returned empty content through the gateway — avoid for cheap work."
-    json: "gpt-5.2-chat returns clean JSON. mini/nano unreliable via gateway."
+    prompting: "Standard chat for gpt-*-chat / gpt-4o. The gpt-5 mini/nano and o-series are REASONING models: budget max_tokens >= 4000 or they return empty content (gpt-5-mini verified clean at 8000, 2026-07-08). Still usually the wrong pick for cheap work vs a standard chat model."
+    json: "gpt-5.2-chat returns clean JSON. gpt-5-mini returned exact clean JSON at high budget (2026-07-08)."
     min_tokens: "max_tokens < 16 -> HTTP 400."
     temperature: "Gateway default."
   google:
@@ -173,29 +178,61 @@ models:
     verdict: "Superseded by deepseek-v3.2. Do not confuse the two."
     provenance: "session 98052add (2026-06-17)"
 
+  # ---- REASONING MODELS — un-blocked 2026-07-08 (the earlier "rejected:
+  # empty content" verdicts were a max_tokens=1024 probe artifact; all need
+  # max_tokens >= 4000 and are slow) ----
   - id: openrouter/openai/gpt-5-nano
     family: openai
-    status: rejected
+    status: unassessed
     use_cases: []
-    weaknesses: ["Returns null content through the gateway — it's a reasoning model; hidden reasoning eats the budget."]
-    verdict: "Dropped. Use a standard chat model instead."
-    provenance: "session 98052add (2026-06-17)"
+    weaknesses: ["2026-06-17 'null content' failure now attributed to the reasoning-budget probe artifact (siblings verified working 2026-07-08 with max_tokens >= 4000). Not itself retested — verify before use."]
+    verdict: "Was wrongly rejected; retest with high budget before relying on it. Standard chat models remain the better cheap-work pick."
+    provenance: "session 98052add (2026-06-17); reclassified by EDI retest 2026-07-08"
 
   - id: openrouter/openai/gpt-5-mini
     family: openai
-    status: rejected
-    use_cases: []
-    weaknesses: ["Returned nothing (empty content) — reasoning model via gateway."]
-    verdict: "Dropped for cheap extraction."
-    provenance: "session 0db06511 (2026-07-04)"
+    status: conditional
+    use_cases: [cheap reasoning tasks where a reasoning model is genuinely wanted]
+    strengths: ["Returned exact clean JSON at max_tokens=8000 (EDI retest 2026-07-08). The 2026-07-04 rejection was a budget artifact."]
+    weaknesses: ["Needs max_tokens >= 4000 or content comes back empty. Task quality unassessed — no bakeoff evidence."]
+    verdict: "Works through the gateway with adequate budget; quality untested."
+    provenance: "session 0db06511 (2026-07-04); EDI retest 2026-07-08"
 
   - id: openrouter/z-ai/glm-5.1
     family: glm
-    status: rejected
+    status: conditional
+    use_cases: [cheap reasoning depth, instruction-precise JSON output]
+    strengths: ["Returned exact, unfenced JSON as instructed at max_tokens=8000 (EDI retest 2026-07-08). Strong on paper (GLM-5.2 beat Sonnet-4.6 on a reasoning board)."]
+    weaknesses: ["Reasoning model: needs max_tokens >= 4000. Task quality beyond instruction-following unassessed."]
+    verdict: "Un-blocked 2026-07-08 — the 2026-07-04 'empty content' was a probe artifact. Candidate for a proper bakeoff slot."
+    provenance: "session 0db06511 (2026-07-04); EDI retest 2026-07-08"
+
+  - id: openrouter/z-ai/glm-5
+    family: glm
+    status: conditional
+    use_cases: [cheap reasoning depth, latency-tolerant]
+    strengths: ["Clean content at max_tokens=4000 (EDI retest 2026-07-08)."]
+    weaknesses: ["Slow — hit the MCP read timeout on a one-sentence task before succeeding on retry. Needs max_tokens >= 4000. Quality unassessed."]
+    verdict: "Works; only for latency-tolerant calls."
+    provenance: "EDI retest 2026-07-08"
+
+  - id: openrouter/z-ai/glm-4.7-flash
+    family: glm
+    status: conditional
+    use_cases: [fast cheap classification (non-reasoning GLM)]
+    strengths: ["Fast, clean one-word classification (EDI retest 2026-07-08). No reasoning-budget trap."]
+    weaknesses: ["Single-probe evidence only — broader quality unassessed."]
+    verdict: "Promising fast-lane GLM; bakeoff before committing."
+    provenance: "EDI retest 2026-07-08"
+
+  - id: openrouter/minimax/minimax-m2.5
+    family: unknown
+    status: conditional
     use_cases: []
-    weaknesses: ["Returned nothing (error/empty) through the gateway — reasoning-content issue, not proven model quality."]
-    verdict: "Blocked until the gateway serves reasoning models reliably (retry with max_tokens 2000+ / merge flag). GLM-5.2 max scored well on paper (beat Sonnet-4.6) but same gateway block."
-    provenance: "session 0db06511 (2026-07-04)"
+    strengths: ["Clean JSON at max_tokens=8000, minor leading-whitespace quirk (EDI retest 2026-07-08)."]
+    weaknesses: ["Needs max_tokens >= 4000 (reasoning model). Quality unassessed."]
+    verdict: "Works through the gateway; untested beyond that."
+    provenance: "EDI retest 2026-07-08"
 
   # ---- REFERENCE ANCHORS (not cheap; for comparison) ----
   - id: openrouter/openai/gpt-5.2-chat
