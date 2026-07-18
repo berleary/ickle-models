@@ -6,7 +6,7 @@ LiteLLM gateway -- local Ollama models and any cloud model behind OpenRouter
 (OpenAI, Perplexity, DeepSeek, Gemini, ...) -- through one endpoint and one key,
 instead of juggling per-provider API keys.
 
-Three tools are exposed:
+Four tools are exposed:
   - list_models(): discover every callable model id (raw gateway list)
   - describe_models(model): the *approved-models catalogue* -- which models to
     use for what, their strengths/weaknesses, and (crucially) how to structure
@@ -14,12 +14,17 @@ Three tools are exposed:
     temperature norms, JSON-mode support). Read this before call_model so you
     are not guessing query structure.
   - call_model(model, prompt, system, max_tokens): send a prompt to any of them
+  - openrouter_balance(): current OpenRouter credit balance (talks directly to
+    openrouter.ai, bypassing the gateway -- LiteLLM tracks its own accounting,
+    not upstream provider credits).
 
 Configuration (environment variables):
   ICKLE_BASE_URL      Gateway base URL (default http://localhost:4000)
   LITELLM_MASTER_KEY  Gateway auth key. If unset, read from a key file.
-  ICKLE_MCP_ENV       Path to a file containing a LITELLM_MASTER_KEY=... line
-                      (default ~/.config/ickle-mcp/env)
+  OPENROUTER_API_KEY  OpenRouter key for openrouter_balance(). If unset, read
+                      from the same key file.
+  ICKLE_MCP_ENV       Path to a file containing KEY=... lines (default
+                      ~/.config/ickle-mcp/env)
   ICKLE_CATALOGUE     Path to the approved-models catalogue YAML
                       (default: data/approved-models.yaml next to this file)
 
@@ -39,22 +44,22 @@ CATALOGUE_PATH = os.environ.get(
 )
 
 
-def _load_key() -> str:
-    key = os.environ.get("LITELLM_MASTER_KEY")
-    if key:
-        return key
+def _load_env_var(name: str) -> str:
+    val = os.environ.get(name)
+    if val:
+        return val
     env_path = os.environ.get("ICKLE_MCP_ENV", os.path.expanduser("~/.config/ickle-mcp/env"))
     try:
         with open(env_path) as f:
             for line in f:
-                if line.startswith("LITELLM_MASTER_KEY="):
+                if line.startswith(f"{name}="):
                     return line.split("=", 1)[1].strip()
     except FileNotFoundError:
         pass
     return ""
 
 
-KEY = _load_key()
+KEY = _load_env_var("LITELLM_MASTER_KEY")
 mcp = FastMCP("ickle-models")
 
 
@@ -182,6 +187,39 @@ def call_model(model: str, prompt: str, system: str = "", max_tokens: int = 1024
         return f"[gateway error {e.code}: {e.read().decode(errors='replace')[:300]}]"
     except Exception as e:  # noqa: BLE001
         return f"[error calling {model}: {e}]"
+
+
+@mcp.tool()
+def openrouter_balance() -> dict:
+    """Query the current OpenRouter credit balance.
+
+    Talks directly to openrouter.ai/api/v1/credits with OPENROUTER_API_KEY
+    (env or ~/.config/ickle-mcp/env). Bypasses the LiteLLM gateway --
+    LiteLLM tracks its own accounting, not upstream provider credits.
+
+    Returns total_credits_usd, total_usage_usd, remaining_usd.
+    """
+    key = _load_env_var("OPENROUTER_API_KEY")
+    if not key:
+        return {"error": "OPENROUTER_API_KEY not set (env or ~/.config/ickle-mcp/env)"}
+    req = urllib.request.Request(
+        "https://openrouter.ai/api/v1/credits",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.load(r).get("data", {})
+        total = float(data.get("total_credits", 0))
+        used = float(data.get("total_usage", 0))
+        return {
+            "total_credits_usd": round(total, 4),
+            "total_usage_usd": round(used, 4),
+            "remaining_usd": round(total - used, 4),
+        }
+    except urllib.error.HTTPError as e:
+        return {"error": f"HTTP {e.code}: {e.read().decode(errors='replace')[:200]}"}
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"failed: {e}"}
 
 
 if __name__ == "__main__":
